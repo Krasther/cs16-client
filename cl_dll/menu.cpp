@@ -131,7 +131,7 @@ static bool CommandMenu_ParseFile( void )
 	byte *source = gEngfuncs.COM_LoadFile( "commandmenu.txt", 5, &fileLength );
 	if( !source )
 	{
-		gEngfuncs.Con_Printf( "Unable to open commandmenu.txt\\n" );
+		gEngfuncs.Con_Printf( "Unable to open commandmenu.txt\n" );
 		return false;
 	}
 
@@ -213,7 +213,7 @@ static bool CommandMenu_ParseFile( void )
 		if( custom && !stricmp( command, "!CHANGETEAM" ))
 			strlcpy( command, "chooseteam", sizeof( command ));
 		else if( custom && command[0] == '!' )
-			command[0] = '\\0';
+			command[0] = '\0';
 
 		lastItem = CommandMenu_AddItem( currentNode, boundKey, itemText,
 			!strcmp( command, "{" ) ? "" : command, mapName, teamOnly, toggle );
@@ -232,7 +232,7 @@ static bool CommandMenu_ParseFile( void )
 	gEngfuncs.COM_FreeFile( source );
 	g_CommandMenuLoaded = g_CommandMenuNodes[0].itemCount > 0;
 	if( !g_CommandMenuLoaded )
-		gEngfuncs.Con_Printf( "commandmenu.txt contained no usable menu entries\\n" );
+		gEngfuncs.Con_Printf( "commandmenu.txt contained no usable menu entries\n" );
 	return g_CommandMenuLoaded;
 }
 
@@ -247,14 +247,14 @@ static bool CommandMenu_MapMatches( const char *wantedMap )
 
 	const char *base = strrchr( levelName, '/' );
 	if( !base )
-		base = strrchr( levelName, '\\\\' );
+		base = strrchr( levelName, '\\' );
 	base = base ? base + 1 : levelName;
 
 	char currentMap[64];
 	strlcpy( currentMap, base, sizeof( currentMap ));
 	char *extension = strrchr( currentMap, '.' );
 	if( extension )
-		*extension = '\\0';
+		*extension = '\0';
 
 	return !stricmp( currentMap, wantedMap );
 }
@@ -284,8 +284,8 @@ static int CommandMenu_FindItemBySlot( int node, int slot )
 
 static void CommandMenu_BuildDisplay( CHudMenu *hudMenu )
 {
-	g_szMenuString[0] = '\\0';
-	strlcpy( g_szMenuString, "Command Menu\\n\\n", sizeof( g_szMenuString ));
+	g_szMenuString[0] = '\0';
+	strlcpy( g_szMenuString, "Command Menu\n\n", sizeof( g_szMenuString ));
 	hudMenu->m_bitsValidSlots = 0;
 
 	if( g_CommandMenuCurrentNode < 0 || g_CommandMenuCurrentNode >= g_CommandMenuNodeCount )
@@ -300,13 +300,13 @@ static void CommandMenu_BuildDisplay( CHudMenu *hudMenu )
 
 		char line[160];
 		const char *label = CHudTextMessage::BufferedLocaliseTextString( item.text );
-		snprintf( line, sizeof( line ), "%d. %s%s\\n", item.slot,
+		snprintf( line, sizeof( line ), "%d. %s%s\n", item.slot,
 			label ? label : item.text, item.childNode >= 0 ? "  >" : "" );
 		strlcat( g_szMenuString, line, sizeof( g_szMenuString ));
 		hudMenu->m_bitsValidSlots |= 1 << ( item.slot - 1 );
 	}
 
-	strlcat( g_szMenuString, g_CommandMenuCurrentNode > 0 ? "\\n0. Back\\n" : "\\n0. Close\\n",
+	strlcat( g_szMenuString, g_CommandMenuCurrentNode > 0 ? "\n0. Back\n" : "\n0. Close\n",
 		sizeof( g_szMenuString ));
 	hudMenu->m_bitsValidSlots |= 1 << 9;
 	hudMenu->m_flShutoffTime = -1;
@@ -325,15 +325,15 @@ static void CommandMenu_Execute( const command_menu_item_t &item )
 	{
 		cvar_t *cvar = gEngfuncs.pfnGetCvarPointer( item.command );
 		if( cvar )
-			snprintf( command, sizeof( command ), "%s %d\\n", item.command, cvar->value == 0.0f ? 1 : 0 );
+			snprintf( command, sizeof( command ), "%s %d\n", item.command, cvar->value == 0.0f ? 1 : 0 );
 		else
-			snprintf( command, sizeof( command ), "%s\\n", item.command );
+			snprintf( command, sizeof( command ), "%s\n", item.command );
 	}
 	else
 	{
-		snprintf( command, sizeof( command ), "%s\\n", item.command );
+		snprintf( command, sizeof( command ), "%s\n", item.command );
 	}
-	command[sizeof( command ) - 1] = '\\0';
+	command[sizeof( command ) - 1] = '\0';
 	ClientCmd( command );
 }
 
@@ -644,7 +644,7 @@ void CHudMenu::UserCmd_CommandMenuReload()
 		return;
 	}
 
-	gEngfuncs.Con_Printf( "commandmenu.txt reloaded\\n" );
+	gEngfuncs.Con_Printf( "commandmenu.txt reloaded\n" );
 	if( reopen )
 	{
 		g_CommandMenuCurrentNode = 0;
