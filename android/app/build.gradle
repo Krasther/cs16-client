@@ -56,7 +56,7 @@ android {
 	buildTypes {
 		debug {
 			debuggable = true
-			applicationIdSuffix = ".test"
+			applicationIdSuffix = ".commandmenu"
 
 			proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.txt"
 		}
