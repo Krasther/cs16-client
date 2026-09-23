@@ -24,6 +24,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "draw_util.h"
 #include "strl.h"
 
@@ -35,6 +36,306 @@ char g_szMenuString[MAX_MENU_STRING];
 char g_szPrelocalisedMenuString[MAX_MENU_STRING];
 
 int KB_ConvertString( char *in, char **ppout );
+
+#define MAX_COMMAND_MENU_ITEMS 128
+#define MAX_COMMAND_MENU_NODES 32
+#define MAX_COMMAND_MENU_NODE_ITEMS 32
+
+struct command_menu_item_t
+{
+	int slot;
+	char text[96];
+	char command[160];
+	char mapName[32];
+	int teamOnly;
+	int childNode;
+	bool toggle;
+};
+
+struct command_menu_node_t
+{
+	int parentNode;
+	int itemIndices[MAX_COMMAND_MENU_NODE_ITEMS];
+	int itemCount;
+};
+
+static command_menu_item_t g_CommandMenuItems[MAX_COMMAND_MENU_ITEMS];
+static command_menu_node_t g_CommandMenuNodes[MAX_COMMAND_MENU_NODES];
+static int g_CommandMenuItemCount = 0;
+static int g_CommandMenuNodeCount = 0;
+static int g_CommandMenuCurrentNode = 0;
+static bool g_CommandMenuActive = false;
+static bool g_CommandMenuLoaded = false;
+
+static int CommandMenu_CreateNode( int parentNode )
+{
+	if( g_CommandMenuNodeCount >= MAX_COMMAND_MENU_NODES )
+		return -1;
+
+	int node = g_CommandMenuNodeCount++;
+	memset( &g_CommandMenuNodes[node], 0, sizeof( g_CommandMenuNodes[node] ));
+	g_CommandMenuNodes[node].parentNode = parentNode;
+	return node;
+}
+
+static int CommandMenu_KeyToSlot( const char *key )
+{
+	if( !key || !key[0] )
+		return 0;
+	if( key[0] >= '1' && key[0] <= '9' )
+		return key[0] - '0';
+	if( key[0] == '0' )
+		return 10;
+	return 0;
+}
+
+static int CommandMenu_AddItem( int node, const char *boundKey, const char *text,
+	const char *command, const char *mapName, int teamOnly, bool toggle )
+{
+	if( node < 0 || node >= g_CommandMenuNodeCount ||
+		g_CommandMenuItemCount >= MAX_COMMAND_MENU_ITEMS ||
+		g_CommandMenuNodes[node].itemCount >= MAX_COMMAND_MENU_NODE_ITEMS )
+		return -1;
+
+	int itemIndex = g_CommandMenuItemCount++;
+	command_menu_item_t &item = g_CommandMenuItems[itemIndex];
+	memset( &item, 0, sizeof( item ));
+	item.slot = CommandMenu_KeyToSlot( boundKey );
+	item.teamOnly = teamOnly;
+	item.childNode = -1;
+	item.toggle = toggle;
+	strlcpy( item.text, text ? text : "", sizeof( item.text ));
+	strlcpy( item.command, command ? command : "", sizeof( item.command ));
+	strlcpy( item.mapName, mapName ? mapName : "", sizeof( item.mapName ));
+
+	g_CommandMenuNodes[node].itemIndices[g_CommandMenuNodes[node].itemCount++] = itemIndex;
+	return itemIndex;
+}
+
+static void CommandMenu_ResetData( void )
+{
+	memset( g_CommandMenuItems, 0, sizeof( g_CommandMenuItems ));
+	memset( g_CommandMenuNodes, 0, sizeof( g_CommandMenuNodes ));
+	g_CommandMenuItemCount = 0;
+	g_CommandMenuNodeCount = 0;
+	g_CommandMenuCurrentNode = 0;
+	g_CommandMenuLoaded = false;
+}
+
+static bool CommandMenu_ParseFile( void )
+{
+	CommandMenu_ResetData();
+	CommandMenu_CreateNode( -1 );
+
+	int fileLength = 0;
+	byte *source = gEngfuncs.COM_LoadFile( "commandmenu.txt", 5, &fileLength );
+	if( !source )
+	{
+		gEngfuncs.Con_Printf( "Unable to open commandmenu.txt\\n" );
+		return false;
+	}
+
+	char token[1024];
+	char *cursor = (char *)source;
+	if( fileLength >= 3 && source[0] == 0xef && source[1] == 0xbb && source[2] == 0xbf )
+		cursor += 3;
+
+	int currentNode = 0;
+	int lastItem = -1;
+
+	while(( cursor = gEngfuncs.COM_ParseFile( cursor, token )) != NULL && token[0] )
+	{
+		if( !strcmp( token, "{" ))
+		{
+			if( lastItem >= 0 && g_CommandMenuItems[lastItem].childNode < 0 )
+			{
+				int child = CommandMenu_CreateNode( currentNode );
+				if( child >= 0 )
+				{
+					g_CommandMenuItems[lastItem].childNode = child;
+					currentNode = child;
+				}
+			}
+			continue;
+		}
+
+		if( !strcmp( token, "}" ))
+		{
+			if( currentNode > 0 )
+				currentNode = g_CommandMenuNodes[currentNode].parentNode;
+			lastItem = -1;
+			continue;
+		}
+
+		char mapName[32] = "";
+		int teamOnly = -1;
+		bool toggle = false;
+		bool custom = false;
+
+		if( !stricmp( token, "CUSTOM" ))
+		{
+			custom = true;
+			cursor = gEngfuncs.COM_ParseFile( cursor, token );
+			if( !cursor ) break;
+		}
+		else if( !stricmp( token, "MAP" ))
+		{
+			cursor = gEngfuncs.COM_ParseFile( cursor, token );
+			if( !cursor ) break;
+			strlcpy( mapName, token, sizeof( mapName ));
+			cursor = gEngfuncs.COM_ParseFile( cursor, token );
+			if( !cursor ) break;
+		}
+		else if( !strnicmp( token, "TEAM", 4 ))
+		{
+			teamOnly = atoi( token + 4 );
+			cursor = gEngfuncs.COM_ParseFile( cursor, token );
+			if( !cursor ) break;
+		}
+		else if( !strnicmp( token, "TOGGLE", 6 ))
+		{
+			toggle = true;
+			cursor = gEngfuncs.COM_ParseFile( cursor, token );
+			if( !cursor ) break;
+		}
+
+		char boundKey[16];
+		strlcpy( boundKey, token, sizeof( boundKey ));
+
+		char itemText[256];
+		cursor = gEngfuncs.COM_ParseFile( cursor, itemText );
+		if( !cursor ) break;
+
+		char command[256];
+		cursor = gEngfuncs.COM_ParseFile( cursor, command );
+		if( !cursor ) break;
+
+		if( custom && !stricmp( command, "!CHANGETEAM" ))
+			strlcpy( command, "chooseteam", sizeof( command ));
+		else if( custom && command[0] == '!' )
+			command[0] = '\\0';
+
+		lastItem = CommandMenu_AddItem( currentNode, boundKey, itemText,
+			!strcmp( command, "{" ) ? "" : command, mapName, teamOnly, toggle );
+
+		if( lastItem >= 0 && !strcmp( command, "{" ))
+		{
+			int child = CommandMenu_CreateNode( currentNode );
+			if( child >= 0 )
+			{
+				g_CommandMenuItems[lastItem].childNode = child;
+				currentNode = child;
+			}
+		}
+	}
+
+	gEngfuncs.COM_FreeFile( source );
+	g_CommandMenuLoaded = g_CommandMenuNodes[0].itemCount > 0;
+	if( !g_CommandMenuLoaded )
+		gEngfuncs.Con_Printf( "commandmenu.txt contained no usable menu entries\\n" );
+	return g_CommandMenuLoaded;
+}
+
+static bool CommandMenu_MapMatches( const char *wantedMap )
+{
+	if( !wantedMap || !wantedMap[0] )
+		return true;
+
+	const char *levelName = gEngfuncs.pfnGetLevelName();
+	if( !levelName || !levelName[0] )
+		return false;
+
+	const char *base = strrchr( levelName, '/' );
+	if( !base )
+		base = strrchr( levelName, '\\\\' );
+	base = base ? base + 1 : levelName;
+
+	char currentMap[64];
+	strlcpy( currentMap, base, sizeof( currentMap ));
+	char *extension = strrchr( currentMap, '.' );
+	if( extension )
+		*extension = '\\0';
+
+	return !stricmp( currentMap, wantedMap );
+}
+
+static bool CommandMenu_ItemVisible( const command_menu_item_t &item )
+{
+	if( item.teamOnly >= 0 && item.teamOnly != g_iTeamNumber )
+		return false;
+	return CommandMenu_MapMatches( item.mapName );
+}
+
+static int CommandMenu_FindItemBySlot( int node, int slot )
+{
+	if( node < 0 || node >= g_CommandMenuNodeCount )
+		return -1;
+
+	command_menu_node_t &menuNode = g_CommandMenuNodes[node];
+	for( int i = 0; i < menuNode.itemCount; i++ )
+	{
+		int itemIndex = menuNode.itemIndices[i];
+		command_menu_item_t &item = g_CommandMenuItems[itemIndex];
+		if( item.slot == slot && CommandMenu_ItemVisible( item ))
+			return itemIndex;
+	}
+	return -1;
+}
+
+static void CommandMenu_BuildDisplay( CHudMenu *hudMenu )
+{
+	g_szMenuString[0] = '\\0';
+	strlcpy( g_szMenuString, "Command Menu\\n\\n", sizeof( g_szMenuString ));
+	hudMenu->m_bitsValidSlots = 0;
+
+	if( g_CommandMenuCurrentNode < 0 || g_CommandMenuCurrentNode >= g_CommandMenuNodeCount )
+		g_CommandMenuCurrentNode = 0;
+
+	command_menu_node_t &node = g_CommandMenuNodes[g_CommandMenuCurrentNode];
+	for( int i = 0; i < node.itemCount; i++ )
+	{
+		command_menu_item_t &item = g_CommandMenuItems[node.itemIndices[i]];
+		if( !CommandMenu_ItemVisible( item ) || item.slot < 1 || item.slot > 9 )
+			continue;
+
+		char line[160];
+		const char *label = CHudTextMessage::BufferedLocaliseTextString( item.text );
+		snprintf( line, sizeof( line ), "%d. %s%s\\n", item.slot,
+			label ? label : item.text, item.childNode >= 0 ? "  >" : "" );
+		strlcat( g_szMenuString, line, sizeof( g_szMenuString ));
+		hudMenu->m_bitsValidSlots |= 1 << ( item.slot - 1 );
+	}
+
+	strlcat( g_szMenuString, g_CommandMenuCurrentNode > 0 ? "\\n0. Back\\n" : "\\n0. Close\\n",
+		sizeof( g_szMenuString ));
+	hudMenu->m_bitsValidSlots |= 1 << 9;
+	hudMenu->m_flShutoffTime = -1;
+	hudMenu->m_fWaitingForMore = FALSE;
+	hudMenu->m_fMenuDisplayed = 1;
+	hudMenu->m_iFlags |= HUD_DRAW;
+}
+
+static void CommandMenu_Execute( const command_menu_item_t &item )
+{
+	if( !item.command[0] )
+		return;
+
+	char command[224];
+	if( item.toggle )
+	{
+		cvar_t *cvar = gEngfuncs.pfnGetCvarPointer( item.command );
+		if( cvar )
+			snprintf( command, sizeof( command ), "%s %d\\n", item.command, cvar->value == 0.0f ? 1 : 0 );
+		else
+			snprintf( command, sizeof( command ), "%s\\n", item.command );
+	}
+	else
+	{
+		snprintf( command, sizeof( command ), "%s\\n", item.command );
+	}
+	command[sizeof( command ) - 1] = '\\0';
+	ClientCmd( command );
+}
 
 void Touch_CloseMenu()
 {
@@ -53,6 +354,10 @@ int CHudMenu :: Init( void )
 	HOOK_COMMAND( gHUD.m_Menu, "client_buy_open", OldStyleMenuOpen );
 	HOOK_COMMAND( gHUD.m_Menu, "client_buy_close", OldStyleMenuClose );
 	HOOK_COMMAND( gHUD.m_Menu, "showvguimenu", ShowVGUIMenu );
+	HOOK_COMMAND( gHUD.m_Menu, "+commandmenu", CommandMenuToggle );
+	HOOK_COMMAND( gHUD.m_Menu, "-commandmenu", CommandMenuRelease );
+	HOOK_COMMAND( gHUD.m_Menu, "commandmenu", CommandMenuToggle );
+	HOOK_COMMAND( gHUD.m_Menu, "commandmenu_reload", CommandMenuReload );
 
 	_extended_menus = CVAR_CREATE("_extended_menus", "1", FCVAR_ARCHIVE);
 
@@ -65,6 +370,7 @@ int CHudMenu :: Init( void )
 
 void CHudMenu :: InitHUDData( void )
 {
+	g_CommandMenuActive = false;
 	m_fMenuDisplayed = 0;
 	m_bitsValidSlots = 0;
 	Reset();
@@ -72,6 +378,7 @@ void CHudMenu :: InitHUDData( void )
 
 void CHudMenu :: Reset( void )
 {
+	g_CommandMenuActive = false;
 	g_szPrelocalisedMenuString[0] = 0;
 	m_fWaitingForMore = FALSE;
 }
@@ -130,7 +437,41 @@ int CHudMenu :: Draw( float flTime )
 // selects an item from the menu
 void CHudMenu :: SelectMenuItem( int menu_item )
 {
-	// if menu_item is in a valid slot,  send a menuselect command to the server
+	if( g_CommandMenuActive )
+	{
+		if( menu_item == 10 )
+		{
+			int parent = g_CommandMenuNodes[g_CommandMenuCurrentNode].parentNode;
+			if( parent >= 0 )
+			{
+				g_CommandMenuCurrentNode = parent;
+				CommandMenu_BuildDisplay( this );
+			}
+			else
+			{
+				UserCmd_OldStyleMenuClose();
+			}
+			return;
+		}
+
+		int itemIndex = CommandMenu_FindItemBySlot( g_CommandMenuCurrentNode, menu_item );
+		if( itemIndex < 0 )
+			return;
+
+		command_menu_item_t &item = g_CommandMenuItems[itemIndex];
+		if( item.childNode >= 0 )
+		{
+			g_CommandMenuCurrentNode = item.childNode;
+			CommandMenu_BuildDisplay( this );
+			return;
+		}
+
+		CommandMenu_Execute( item );
+		UserCmd_OldStyleMenuClose();
+		return;
+	}
+
+	// if menu_item is in a valid slot, send a menuselect command to the server
 	if ( (menu_item > 0) && (m_bitsValidSlots & (1 << (menu_item-1))) )
 	{
 		char szbuf[32];
@@ -151,6 +492,7 @@ void CHudMenu :: SelectMenuItem( int menu_item )
 // if this message is never received, then scores will simply be the combined totals of the players.
 int CHudMenu :: MsgFunc_ShowMenu( const char *pszName, int iSize, void *pbuf )
 {
+	g_CommandMenuActive = false;
 	char *temp = NULL, *menustring;
 
 	BufferReader reader( pszName, pbuf, iSize );
@@ -226,6 +568,7 @@ int CHudMenu :: MsgFunc_ShowMenu( const char *pszName, int iSize, void *pbuf )
 
 int CHudMenu::MsgFunc_VGUIMenu( const char *pszName, int iSize, void *pbuf )
 {
+	g_CommandMenuActive = false;
 	BufferReader reader( pszName, pbuf, iSize );
 
 	int menuType = reader.ReadByte();
@@ -262,10 +605,52 @@ void CHudMenu::UserCmd_OldStyleMenuOpen()
 
 void CHudMenu::UserCmd_OldStyleMenuClose()
 {
+	g_CommandMenuActive = false;
 	m_fMenuDisplayed = 0; // no valid slots means that the menu should be turned off
 	m_iFlags &= ~HUD_DRAW;
 
 	Touch_CloseMenu();
+}
+
+void CHudMenu::UserCmd_CommandMenuToggle()
+{
+	if( g_CommandMenuActive )
+	{
+		UserCmd_OldStyleMenuClose();
+		return;
+	}
+
+	if( !CommandMenu_ParseFile() )
+		return;
+
+	g_CommandMenuCurrentNode = 0;
+	g_CommandMenuActive = true;
+	CommandMenu_BuildDisplay( this );
+}
+
+void CHudMenu::UserCmd_CommandMenuRelease()
+{
+	// Intentionally left open on key release. This makes a normal tap of a
+	// +commandmenu bind useful on physical keyboards and Android.
+}
+
+void CHudMenu::UserCmd_CommandMenuReload()
+{
+	bool reopen = g_CommandMenuActive;
+	CommandMenu_ResetData();
+	if( !CommandMenu_ParseFile() )
+	{
+		UserCmd_OldStyleMenuClose();
+		return;
+	}
+
+	gEngfuncs.Con_Printf( "commandmenu.txt reloaded\\n" );
+	if( reopen )
+	{
+		g_CommandMenuCurrentNode = 0;
+		g_CommandMenuActive = true;
+		CommandMenu_BuildDisplay( this );
+	}
 }
 
 // lol, no real VGUI here
